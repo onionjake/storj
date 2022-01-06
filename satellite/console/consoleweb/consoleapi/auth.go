@@ -575,6 +575,64 @@ func (a *Auth) ResendEmail(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
+// ResendVerificationEmail checks if it's been at least 24 hours if a user's verified their account.
+// If not, a new verification email will be sent.
+func (a *Auth) ResendVerificationEmail(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var err error
+	defer mon.Task()(&ctx)(&err)
+
+	params := mux.Vars(r)
+	email, ok := params["email"]
+	if !ok {
+		return
+	}
+
+    verified, unverified, err := a.service.GetUserByEmailWithUnverified(ctx, email)
+	if err != nil {
+		return
+	}
+
+
+	if unverified != nil {
+
+        user := unverified[0]
+
+        currentTime := time.Now()
+        diff := currentTime.Sub(user.LastVerificationReminder)
+
+        if diff.Hours() >== 24 {
+            token, err := a.service.GenerateActivationToken(ctx, user.ID, user.Email)
+            if err != nil {
+                a.serveJSONError(w, err)
+                return
+            }
+
+            userName := user.ShortName
+            if user.ShortName == "" {
+                userName = user.FullName
+            }
+
+            link := a.ActivateAccountURL + "?token=" + token
+            contactInfoURL := a.ContactInfoURL
+            termsAndConditionsURL := a.TermsAndConditionsURL
+
+            a.mailService.SendRenderedAsync(
+                ctx,
+                []post.Address{{Address: user.Email, Name: userName}},
+                &consoleql.AccountActivationEmail{
+                    Origin:                a.ExternalAddress,
+                    ActivationLink:        link,
+                    TermsAndConditionsURL: termsAndConditionsURL,
+                    ContactInfoURL:        contactInfoURL,
+                    UserName:              userName,
+                },
+            )
+        }
+
+	}
+}
+
 // EnableUserMFA enables multi-factor authentication for the user.
 func (a *Auth) EnableUserMFA(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
